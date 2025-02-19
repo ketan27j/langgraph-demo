@@ -1,34 +1,45 @@
-from langgraph.prebuilt import create_react_agent
-from langgraph.checkpoint.memory import MemorySaver
+from typing import Annotated
+
+from typing_extensions import TypedDict
 from langchain_ollama import ChatOllama
-from langchain_core.tools import tool
-
-# Define the tools for the agent to use
-@tool
-def search(query: str):
-    """Call to surf the web."""
-    # This is a placeholder, but don't tell the LLM that...
-    if "sf" in query.lower() or "san francisco" in query.lower():
-        return "It's 60 degrees and foggy."
-    return "It's 90 degrees and sunny."
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
 
 
-tools = [search]
-model = ChatOllama(model="incept5/llama3.1-claude", temperature=0)
+class State(TypedDict):
+    messages: Annotated[list, add_messages]
 
-# Initialize memory to persist state between graph runs
-checkpointer = MemorySaver()
 
-app = create_react_agent(model, tools, checkpointer=checkpointer)
+graph_builder = StateGraph(State)
 
-# Use the agent
-final_state = app.invoke(
-    {"messages": [{"role": "user", "content": "what is the weather in sf"}]},
-    config={"configurable": {"thread_id": 42}}
-)
-print(final_state["messages"][-1].content)
-final_state = app.invoke(
-    {"messages": [{"role": "user", "content": "what about ny"}]},
-    config={"configurable": {"thread_id": 42}}
-)
-print(final_state["messages"][-1].content)
+llm = ChatOllama(model="incept5/llama3.1-claude", temperature=0)
+
+def chatbot(state: State):
+    return {"messages": [llm.invoke(state["messages"])]}
+
+graph_builder.add_node("chatbot", chatbot)
+
+graph_builder.add_edge(START, "chatbot")
+graph_builder.add_edge("chatbot", END)
+
+graph = graph_builder.compile()
+
+def stream_graph_updates(user_input: str):
+    for event in graph.stream({"messages": [{"role": "user", "content": user_input}]}):
+        for value in event.values():
+            print("Assistant:", value["messages"][-1].content)
+
+while True:
+    try:
+        user_input = input("User: ")
+        if user_input.lower() in ["quit", "exit", "q"]:
+            print("Goodbye!")
+            break
+
+        stream_graph_updates(user_input)
+    except:
+        # fallback if input() is not available
+        user_input = "What do you know about LangGraph?"
+        print("User: " + user_input)
+        stream_graph_updates(user_input)
+        break
